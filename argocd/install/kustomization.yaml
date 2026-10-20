@@ -1,0 +1,43 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+resources:
+  - namespace.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.5/manifests/install.yaml
+  - route.yaml
+
+# 2 CPU / 4 GB cluster: keep only server, repo-server, application-controller, redis.
+# dex = SSO (unused), notifications and applicationset controllers = unused here.
+replicas:
+  - name: argocd-dex-server
+    count: 0
+  - name: argocd-notifications-controller
+    count: 0
+  - name: argocd-applicationset-controller
+    count: 0
+
+patches:
+  # Upstream redis pins runAsUser: 999. OpenShift's restricted-v2 SCC rejects any UID
+  # outside the namespace's allocated range, so drop it and let the SCC assign one.
+  - target:
+      kind: Deployment
+      name: argocd-redis
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/securityContext/runAsUser
+  # Serve HTTP on 8080 so the edge Route can terminate TLS (see route.yaml).
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: argocd-cmd-params-cm
+      data:
+        server.insecure: "true"
+  # Let the repo-server render kustomizations that pull Helm charts (istio/).
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: argocd-cm
+      data:
+        kustomize.buildOptions: --enable-helm

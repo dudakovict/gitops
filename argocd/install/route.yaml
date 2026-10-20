@@ -1,0 +1,17 @@
+# argocd-server is told to serve plain HTTP (server.insecure below) and the router
+# terminates TLS at the edge. The alternative is a passthrough Route to the 8443 port
+# with Argo's self-signed cert; edge is simpler and matches how most OpenShift installs do it.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: argocd-server
+spec:
+  host: argocd.apps.crc.testing
+  to:
+    kind: Service
+    name: argocd-server
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

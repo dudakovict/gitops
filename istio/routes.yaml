@@ -1,0 +1,33 @@
+# One OpenShift Route per environment, all terminating TLS at the router and forwarding
+# plain HTTP to the Istio ingress gateway. Routing to the right namespace happens in Istio.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: docqa-dev
+  namespace: istio-system
+spec:
+  host: docqa-dev.apps.crc.testing
+  to:
+    kind: Service
+    name: istio-ingressgateway
+  port:
+    targetPort: http2
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: docqa-prod
+  namespace: istio-system
+spec:
+  host: docqa-prod.apps.crc.testing
+  to:
+    kind: Service
+    name: istio-ingressgateway
+  port:
+    targetPort: http2
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: docqa-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io   # deleting the Application also deletes what it deployed
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dudakovict/docqa.git
+    targetRevision: main
+    path: k8s/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: docqa-dev
+  syncPolicy:
+    automated:
+      prune: true      # delete cluster objects that disappear from git
+      selfHeal: true   # revert manual oc edits back to what git says
+    syncOptions:
+      - CreateNamespace=false   # namespace.yaml lives in the overlay

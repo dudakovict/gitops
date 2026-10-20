@@ -1,0 +1,98 @@
+# PostgreSQL 17 with pgvector. The official image supports arbitrary UIDs (nss_wrapper),
+# so it runs under restricted-v2 unchanged. PGDATA is a subdirectory because the volume
+# root holds lost+found.
+apiVersion: v1
+kind: Service
+metadata:
+  name: docqa-postgres
+  labels:
+    app: docqa-postgres
+spec:
+  clusterIP: None
+  selector:
+    app: docqa-postgres
+  ports:
+    - name: tcp-postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: docqa-postgres
+  labels:
+    app: docqa-postgres
+spec:
+  serviceName: docqa-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docqa-postgres
+  template:
+    metadata:
+      labels:
+        app: docqa-postgres
+      annotations:
+        # Postgres speaks its own protocol; no need for the proxy to parse it as HTTP.
+        sidecar.istio.io/inject: "true"
+    spec:
+      serviceAccountName: docqa-postgres
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: docker.io/pgvector/pgvector:0.8.7-pg17
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: docqa
+            - name: POSTGRES_USER
+              value: docqa
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docqa-postgres
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: run
+              mountPath: /var/run/postgresql
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "docqa", "-d", "docqa", "-h", "127.0.0.1"]
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "docqa", "-d", "docqa", "-h", "127.0.0.1"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 192Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: run
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

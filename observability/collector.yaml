@@ -1,0 +1,48 @@
+# OpenTelemetry Collector pipeline: receivers -> processors -> exporters.
+# The app pushes traces and metrics over OTLP/gRPC (through the mesh, mTLS). The collector
+# tags everything with the cluster, logs a summary, and re-exposes metrics on :8889 so they
+# can be checked without a Prometheus. Pointing a real backend at this is one exporter block.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 96
+    spike_limit_mib: 24
+  resource:
+    attributes:
+      - key: cluster
+        value: microshift-local
+        action: upsert
+
+exporters:
+  debug:
+    verbosity: basic
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      encoding: json
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, prometheus]

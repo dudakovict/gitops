@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: docqa-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dudakovict/docqa.git
+    targetRevision: main
+    path: k8s/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: docqa-prod
+  # No syncPolicy.automated: prod shows OutOfSync and waits for a human to press Sync.
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false

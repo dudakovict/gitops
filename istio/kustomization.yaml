@@ -1,0 +1,95 @@
+# Istio 1.31 in sidecar mode, installed from the upstream Helm charts through kustomize.
+# Argo CD renders this with `--enable-helm` (set in argocd-cm). Chart order matters:
+# base (CRDs) -> cni (node agent) -> istiod -> gateway.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - mesh-default.yaml
+  - routes.yaml
+helmGlobals:
+  chartHome: charts
+helmCharts:
+  - name: base
+    repo: https://blob.istio.io/istio-release/charts
+    version: 1.31.2
+    releaseName: istio-base
+    namespace: istio-system
+    includeCRDs: true
+    valuesInline:
+      defaultRevision: default
+  - name: cni
+    repo: https://blob.istio.io/istio-release/charts
+    version: 1.31.2
+    releaseName: istio-cni
+    namespace: kube-system          # OpenShift keeps privileged node agents in kube-system
+    valuesFile: values-cni.yaml
+  - name: istiod
+    repo: https://blob.istio.io/istio-release/charts
+    version: 1.31.2
+    releaseName: istiod
+    namespace: istio-system
+    valuesFile: values-istiod.yaml
+  - name: gateway
+    repo: https://blob.istio.io/istio-release/charts
+    version: 1.31.2
+    releaseName: istio-ingressgateway
+    namespace: istio-system
+    valuesFile: values-gateway.yaml
+# Argo CD sync waves: istiod (and its injection webhook) must be healthy before the gateway
+# pod is created, because the gateway's image is "auto" and only the webhook fills it in.
+patches:
+  # MicroShift ships OVN-Kubernetes as a single-plugin 10-ovn-kubernetes.conf. Before the CNI
+  # agent starts, wrap it into a .conflist that sorts first and keeps OVN's name and spec
+  # version, so CRI-O keeps "ovn-kubernetes" as its default network with istio-cni chained in.
+  - target:
+      kind: DaemonSet
+      name: istio-cni-node
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers
+        value:
+          - name: bootstrap-conflist
+            image: docker.io/istio/install-cni:1.31.2
+            command: ["/bin/sh", "-ec"]
+            args:
+              - |
+                d=/host/etc/cni/net.d
+                if [ ! -f "$d/00-ovn-kubernetes.conflist" ] && [ -f "$d/10-ovn-kubernetes.conf" ]; then
+                  v=$(sed -n 's/.*"cniVersion":"\([^"]*\)".*/\1/p' "$d/10-ovn-kubernetes.conf")
+                  printf '{"cniVersion":"%s","name":"ovn-kubernetes","plugins":[%s]}\n' "${v:-1.0.0}" "$(cat "$d/10-ovn-kubernetes.conf")" > "$d/.00-ovn-kubernetes.conflist.tmp"
+                  chmod 600 "$d/.00-ovn-kubernetes.conflist.tmp"
+                  mv "$d/.00-ovn-kubernetes.conflist.tmp" "$d/00-ovn-kubernetes.conflist"
+                  echo "created 00-ovn-kubernetes.conflist from 10-ovn-kubernetes.conf"
+                else
+                  echo "00-ovn-kubernetes.conflist present or no OVN conf; nothing to do"
+                fi
+            securityContext:
+              runAsUser: 0
+              runAsGroup: 0
+              runAsNonRoot: false
+              privileged: false
+              seLinuxOptions:
+                type: spc_t
+              capabilities:
+                drop: ["ALL"]
+            volumeMounts:
+              - name: cni-net-dir
+                mountPath: /host/etc/cni/net.d
+            resources:
+              requests: { cpu: 5m, memory: 16Mi }
+              limits: { cpu: 100m, memory: 64Mi }
+  - target:
+      kind: Deployment
+      name: istiod
+    patch: |-
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1sync-wave
+        value: "1"
+  - target:
+      kind: Deployment
+      name: istio-ingressgateway
+    patch: |-
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1sync-wave
+        value: "2"

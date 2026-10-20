@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docqa-worker
+  labels:
+    app: docqa-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docqa-worker
+  template:
+    metadata:
+      labels:
+        app: docqa-worker
+        version: v1
+    spec:
+      serviceAccountName: docqa-worker
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 120   # let an in-flight ingestion finish its batch
+      containers:
+        - name: worker
+          image: docker.io/dudakovict/docqa
+          command: ["docqa-worker"]
+          envFrom:
+            - configMapRef:
+                name: docqa-config
+            - secretRef:
+                name: docqa-secrets
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: docqa-postgres
+                  key: database-url
+            - name: OTEL_SERVICE_NAME
+              value: docqa-worker
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

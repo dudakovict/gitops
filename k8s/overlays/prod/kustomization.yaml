@@ -1,0 +1,48 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: docqa-prod
+resources:
+- namespace.yaml
+- ../../base
+labels:
+- pairs:
+    env: prod
+configMapGenerator:
+- envs:
+  - config.env
+  name: docqa-config
+# Secrets (docqa-secrets, docqa-postgres) are created by the Ansible playbook from
+# environment variables and never live in git.
+replicas:
+- count: 2
+  name: docqa-api
+- count: 1
+  name: docqa-worker
+images:
+- name: docker.io/dudakovict/docqa
+  newName: docker.io/dudakovict/docqa
+  newTag: 0.1.0
+patches:
+- patch: |-
+    - op: replace
+      path: /spec/servers/0/hosts/0
+      value: docqa-prod.apps.crc.testing
+  target:
+    kind: Gateway
+    name: docqa
+- patch: |-
+    - op: replace
+      path: /spec/hosts/0
+      value: docqa-prod.apps.crc.testing
+  target:
+    kind: VirtualService
+    name: docqa
+- patch: |-
+    - op: replace
+      path: /spec/rules/0/from/0/source/principals
+      value:
+        - cluster.local/ns/docqa-prod/sa/docqa-api
+        - cluster.local/ns/docqa-prod/sa/docqa-worker
+  target:
+    kind: AuthorizationPolicy
+    name: docqa-postgres

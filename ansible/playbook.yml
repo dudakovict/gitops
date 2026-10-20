@@ -1,0 +1,216 @@
+# Bootstraps docqa from a clean machine:
+#   - Argo CD on the OpenShift cluster (uses the current kubeconfig context)
+#   - application namespaces and their Secrets, from environment variables
+#   - the Argo CD Applications: istio, observability, dev (automated), prod (manual)
+#   - Jenkins as a rootless Podman container on this machine
+# Idempotent: a second run reports no changes unless a file changed.
+#
+#   ansible-galaxy collection install -r requirements.yml
+#   ansible-playbook playbook.yml                 # everything
+#   ansible-playbook playbook.yml --tags jenkins  # just redeploy Jenkins after a casc.yaml edit
+- name: docqa bootstrap
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    repo_dir: "{{ playbook_dir | dirname }}"
+    jenkins_image: docqa-jenkins:local
+    jenkins_port: 8080
+    # Bind-mounted at the same path inside and outside the container, so the Docker Pipeline
+    # plugin can mount workspace paths into the per-stage containers it starts.
+    jenkins_home: "{{ lookup('env', 'HOME') }}/.local/share/docqa-jenkins"
+
+  tasks:
+    # ------------------------------------------------------------------ Argo CD
+    - name: Install Argo CD (kustomize render, server-side apply)
+      kubernetes.core.k8s:
+        definition: "{{ lookup('kubernetes.core.kustomize', dir=repo_dir + '/argocd/install') }}"
+        state: present
+        apply: true
+        server_side_apply:
+          field_manager: ansible
+          force_conflicts: true
+      tags: argocd
+
+    - name: Wait for Argo CD deployments
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        namespace: argocd
+        name: "{{ item }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 300
+      loop:
+        - argocd-redis
+        - argocd-repo-server
+        - argocd-server
+      tags: argocd
+
+    - name: Wait for Argo CD application controller
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: argocd
+        label_selectors:
+          - app.kubernetes.io/name=argocd-application-controller
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      tags: argocd
+
+    # ---------------------------------------------------------------- app secrets
+    # The Gemini API key and the database password come from the environment of whoever
+    # runs this playbook (GOOGLE_API_KEY, DOCQA_API_TOKEN, DOCQA_POSTGRES_PASSWORD).
+    # They are written straight into Secrets and never touch git.
+    - name: Check app secrets are present in the environment
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'GOOGLE_API_KEY') | length > 0
+          - lookup('env', 'DOCQA_API_TOKEN') | length > 0
+          - lookup('env', 'DOCQA_POSTGRES_PASSWORD') | length > 0
+        fail_msg: "Export GOOGLE_API_KEY, DOCQA_API_TOKEN and DOCQA_POSTGRES_PASSWORD before running"
+      tags: [argocd, secrets]
+
+    - name: Create application namespaces
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "docqa-{{ item }}"
+            labels:
+              istio-injection: enabled
+      loop: [dev, prod]
+      tags: [argocd, secrets]
+
+    - name: Create docqa-secrets (Gemini API key)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: docqa-secrets
+            namespace: "docqa-{{ item }}"
+          type: Opaque
+          stringData:
+            GOOGLE_API_KEY: "{{ lookup('env', 'GOOGLE_API_KEY') }}"
+            DOCQA_API_TOKEN: "{{ lookup('env', 'DOCQA_API_TOKEN') }}"
+      loop: [dev, prod]
+      no_log: true
+      tags: [argocd, secrets]
+
+    - name: Create docqa-postgres secret (password and connection URL)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: docqa-postgres
+            namespace: "docqa-{{ item }}"
+          type: Opaque
+          stringData:
+            password: "{{ lookup('env', 'DOCQA_POSTGRES_PASSWORD') }}"
+            database-url: "postgresql://docqa:{{ lookup('env', 'DOCQA_POSTGRES_PASSWORD') | urlencode }}@docqa-postgres:5432/docqa"
+      loop: [dev, prod]
+      no_log: true
+      tags: [argocd, secrets]
+
+    - name: Create Argo CD Applications
+      kubernetes.core.k8s:
+        src: "{{ repo_dir }}/argocd/apps/{{ item }}.yaml"
+        state: present
+      loop: [istio, observability, dev, prod]
+      tags: argocd
+
+    # ------------------------------------------------------------------ Jenkins
+    - name: Check jenkins/.env exists
+      ansible.builtin.stat:
+        path: "{{ repo_dir }}/jenkins/.env"
+      register: env_file
+      tags: jenkins
+
+    - name: Refuse to continue without secrets
+      ansible.builtin.assert:
+        that: env_file.stat.exists
+        fail_msg: "Create jenkins/.env from jenkins/.env.example first"
+      tags: jenkins
+
+    - name: Ensure secrets directory
+      ansible.builtin.file:
+        path: "{{ repo_dir }}/jenkins/secrets"
+        state: directory
+        mode: "0700"
+      tags: jenkins
+
+    - name: Generate GitHub deploy key (kept if already present)
+      community.crypto.openssh_keypair:
+        path: "{{ repo_dir }}/jenkins/secrets/GITHUB_DEPLOY_KEY"
+        type: ed25519
+        comment: jenkins-docqa-deploy
+      register: deploy_key
+      tags: jenkins
+
+    - name: Show new public key to add on GitHub
+      ansible.builtin.debug:
+        msg: "Add as a deploy key WITH write access: {{ deploy_key.public_key }}"
+      when: deploy_key.changed
+      tags: jenkins
+
+    - name: Ensure the rootless Podman API socket is enabled for this user
+      ansible.builtin.systemd_service:
+        name: podman.socket
+        scope: user
+        enabled: true
+        state: started
+      tags: jenkins
+
+    - name: Build Jenkins image
+      containers.podman.podman_image:
+        name: "{{ jenkins_image }}"
+        path: "{{ repo_dir }}/jenkins"
+        state: build
+        force: true                 # always rebuild; the layer cache keeps it fast
+      tags: jenkins
+
+    - name: Ensure Jenkins home directory
+      ansible.builtin.file:
+        path: "{{ jenkins_home }}"
+        state: directory
+        mode: "0755"
+      tags: jenkins
+
+    - name: Run Jenkins container (recreated only if image or config changed)
+      containers.podman.podman_container:
+        name: jenkins
+        image: "{{ jenkins_image }}"
+        state: started
+        restart_policy: unless-stopped
+        publish:
+          - "{{ jenkins_port }}:8080"
+        env_file: "{{ repo_dir }}/jenkins/.env"
+        env:
+          JENKINS_HOME: "{{ jenkins_home }}"
+        # keep-id maps this user to the same UID inside, so the jenkins user (1000) owns
+        # the mounted socket and home directory without any group juggling.
+        userns: keep-id
+        volumes:
+          - "{{ jenkins_home }}:{{ jenkins_home }}"
+          - "{{ lookup('env', 'XDG_RUNTIME_DIR') }}/podman/podman.sock:/run/podman/podman.sock"
+          - "{{ repo_dir }}/jenkins/secrets:/run/secrets:ro"
+      tags: jenkins
+
+    - name: Wait for Jenkins UI
+      ansible.builtin.uri:
+        url: "http://localhost:{{ jenkins_port }}/login"
+        status_code: 200
+      register: jenkins_ui
+      until: jenkins_ui.status == 200
+      retries: 40
+      delay: 5
+      tags: jenkins

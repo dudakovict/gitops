@@ -1,0 +1,17 @@
+# Only docqa workloads may push telemetry; everything else in the mesh is denied.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: otel-collector
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["docqa-dev", "docqa-prod"]
+      to:
+        - operation:
+            ports: ["4317"]

@@ -1,0 +1,43 @@
+# Local development only (podman compose up --build). The cluster deployment lives in k8s/.
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:0.8.7-pg17
+    environment:
+      POSTGRES_DB: docqa
+      POSTGRES_USER: docqa
+      POSTGRES_PASSWORD: docqa
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docqa -d docqa"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: ./app
+    entrypoint: ["docqa-migrate"]
+    environment: &env
+      DATABASE_URL: postgresql://docqa:docqa@postgres:5432/docqa
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      DOCQA_API_TOKEN: ${DOCQA_API_TOKEN}
+      DOCQA_ENV: local
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    build: ./app
+    environment: *env
+    ports: ["8090:8080"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    build: ./app
+    entrypoint: ["docqa-worker"]
+    environment: *env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  pgdata:

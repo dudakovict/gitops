@@ -1,0 +1,10 @@
+# Mesh-wide default: every sidecar requires mTLS. Namespaces outside the mesh are unaffected;
+# namespaces inside it cannot receive plaintext from anything that is not also in the mesh.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT

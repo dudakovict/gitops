@@ -1,0 +1,78 @@
+# Traffic policy for this namespace. Mesh-wide STRICT mTLS is set in istio/; these objects
+# add the ingress path and who-may-call-whom rules on top.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: docqa
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "placeholder.example"   # replaced per overlay with the environment's Route host
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: docqa
+spec:
+  hosts:
+    - "placeholder.example"
+  gateways:
+    - docqa
+  http:
+    - route:
+        - destination:
+            host: docqa-api
+            port:
+              number: 80
+      timeout: 300s   # streamed answers and large uploads take a while
+---
+# Only the ingress gateway may call the API.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: docqa-api
+spec:
+  selector:
+    matchLabels:
+      app: docqa-api
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway"]
+---
+# Only the API, the worker and the migration job may talk to Postgres.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: docqa-postgres
+spec:
+  selector:
+    matchLabels:
+      app: docqa-postgres
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/PLACEHOLDER_NS/sa/docqa-api"
+              - "cluster.local/ns/PLACEHOLDER_NS/sa/docqa-worker"
+---
+# Nothing may call the worker; it has no listening port but the rule makes intent explicit.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: docqa-worker
+spec:
+  selector:
+    matchLabels:
+      app: docqa-worker
+  action: DENY
+  rules:
+    - {}

@@ -1,0 +1,18 @@
+# The ingress gateway (Envoy) that the OpenShift router hands traffic to. Running behind the
+# router keeps the cluster's trusted TLS cert at the edge and lets Istio own everything inside.
+global:
+  platform: openshift
+autoscaling:
+  enabled: false
+service:
+  # The OpenShift router reaches the gateway through its ClusterIP via the Routes in routes.yaml;
+  # a LoadBalancer Service would wait forever for an external IP on a bare-metal cluster.
+  type: ClusterIP
+replicaCount: 1
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 192Mi

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>docqa</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>docqa</h1>
+    <p class="sub">Upload a PDF, wait for it to be indexed, then ask questions. Answers cite page numbers.</p>
+    <details id="auth" open>
+      <summary>API token</summary>
+      <input id="token" type="password" placeholder="DOCQA_API_TOKEN (required)" autocomplete="off">
+    </details>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Documents</h2>
+      <form id="upload">
+        <input id="file" type="file" accept="application/pdf" required>
+        <button type="submit">Upload</button>
+        <progress id="progress" value="0" max="100" hidden></progress>
+      </form>
+      <ul id="docs" class="docs"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Ask <span id="current" class="muted">(select a ready document)</span></h2>
+      <div id="chat" class="chat"></div>
+      <form id="askform">
+        <textarea id="question" rows="2" placeholder="What does the document say about…" required></textarea>
+        <button id="askbtn" type="submit" disabled>Ask</button>
+      </form>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

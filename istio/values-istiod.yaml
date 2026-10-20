@@ -1,0 +1,41 @@
+# Sidecar-mode control plane sized for a small cluster. Platform quirks are explained inline.
+global:
+  platform: openshift
+  proxy:
+    # Every injected Envoy gets these; keep them small on a 4 GB node.
+    resources:
+      requests:
+        cpu: 10m
+        memory: 48Mi
+      limits:
+        cpu: 500m
+        memory: 192Mi
+  logAsJson: true
+# istiod carries a copy of the CNI settings for the injection template; keep it consistent
+# with values-cni.yaml instead of the Multus defaults from the OpenShift profile.
+cni:
+  cniBinDir: /run/cni/bin
+  cniConfDir: /etc/cni/net.d
+  chained: true
+  cniConfFileName: "00-ovn-kubernetes.conflist"
+  provider: default
+pilot:
+  cni:
+    enabled: true          # traffic redirection by the CNI node agent, no NET_ADMIN init container
+    provider: default      # MicroShift has no Multus; the plugin chains into /etc/cni/net.d directly
+  env:
+    ENABLE_NATIVE_SIDECARS: "true"   # proxy as a Kubernetes-native sidecar: starts before app containers, Jobs can finish
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  autoscaleEnabled: false
+meshConfig:
+  accessLogFile: /dev/stdout
+  accessLogEncoding: JSON
+  enablePrometheusMerge: true
+  defaultConfig:
+    holdApplicationUntilProxyStarts: true

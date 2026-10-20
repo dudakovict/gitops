@@ -1,0 +1,57 @@
+jenkins:
+  systemMessage: "docqa - configured by casc.yaml"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: ${JENKINS_ADMIN_PASSWORD}
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+unclassified:
+  location:
+    url: http://localhost:8080/
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              id: dockerhub
+              description: Docker Hub push
+              username: ${DOCKERHUB_USER}
+              password: ${DOCKERHUB_TOKEN}
+          - basicSSHUserPrivateKey:
+              id: github-deploy-key
+              description: GitHub deploy key (write) for tag bumps
+              username: git
+              privateKeySource:
+                directEntry:
+                  privateKey: ${GITHUB_DEPLOY_KEY}
+
+jobs:
+  - script: >
+      pipelineJob('docqa') {
+        properties {
+          pipelineTriggers {
+            triggers {
+              pollSCM { scmpoll_spec('H/2 * * * *') }
+            }
+          }
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote { url('https://github.com/dudakovict/docqa.git') }
+                branch('*/main')
+              }
+            }
+            scriptPath('Jenkinsfile')
+            lightweight(true)
+          }
+        }
+      }

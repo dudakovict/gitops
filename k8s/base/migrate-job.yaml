@@ -1,0 +1,51 @@
+# Schema migrations run once per sync, before the new API/worker roll out. Argo CD treats
+# this as a PreSync hook and recreates it on every sync; a failed migration fails the sync
+# and the old version keeps running. With native sidecars the proxy exits with the Job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: docqa-migrate
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: docqa-migrate
+    spec:
+      serviceAccountName: docqa-worker
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: docker.io/dudakovict/docqa
+          command: ["docqa-migrate"]
+          envFrom:
+            - configMapRef:
+                name: docqa-config
+            - secretRef:
+                name: docqa-secrets
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: docqa-postgres
+                  key: database-url
+          resources:
+            requests:
+              cpu: 20m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
